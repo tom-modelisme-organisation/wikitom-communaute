@@ -1,5 +1,5 @@
 #!/bin/bash
-# TOM Server - Installateur macOS ULTRA-SIMPLE
+# TOM Server - Installateur macOS avec port automatique
 # URL: https://raw.githubusercontent.com/tom-modelisme-organisation/wikitom-communaute/main/script-install-server-mac.sh
 
 set -e
@@ -11,11 +11,9 @@ echo ""
 
 # Variables
 TOM_DIR="/Applications/TOM-Server"
-USER_HOME="$HOME"
 
 echo "📦 Étape 1/4 - Vérification Node.js..."
 
-# Vérifier ou installer Node.js
 if command -v node >/dev/null 2>&1; then
     NODE_CURRENT=$(node -v | sed 's/v//')
     echo "✅ Node.js déjà installé (version $NODE_CURRENT)"
@@ -32,9 +30,12 @@ fi
 echo ""
 echo "📂 Étape 2/4 - Création dossier TOM..."
 
+# Arrêter tous les anciens serveurs Node.js
+pkill -f "node.*serveur-https" 2>/dev/null || true
+pkill -f "node.*TOM" 2>/dev/null || true
+
 sudo mkdir -p "$TOM_DIR"
 sudo chown -R "$(whoami):staff" "$TOM_DIR"
-chmod 755 "$TOM_DIR"
 
 echo "✅ Dossier créé: $TOM_DIR"
 
@@ -53,17 +54,17 @@ cat > "$TOM_DIR/package.json" << 'PACKAGE_EOF'
 }
 PACKAGE_EOF
 
-# Serveur HTTPS avec génération automatique de certificats
+# Serveur HTTPS avec détection automatique de port libre
 cat > "$TOM_DIR/serveur-https-complet.js" << 'SERVER_EOF'
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const { execSync } = require('child_process');
 
 class TOMServer {
-    constructor(port = 3443) {
-        this.port = port;
+    constructor() {
         this.app = express();
         this.codeAppairage = this.genererCode();
         this.setupExpress();
@@ -129,25 +130,47 @@ class TOMServer {
         return Math.random().toString(36).substr(2, 6).toUpperCase();
     }
 
+    async trouverPortLibre(startPort = 3443) {
+        for (let port = startPort; port < startPort + 10; port++) {
+            if (await this.isPortFree(port)) {
+                return port;
+            }
+        }
+        throw new Error('Aucun port libre trouvé');
+    }
+
+    isPortFree(port) {
+        return new Promise((resolve) => {
+            const server = net.createServer();
+            server.listen(port, () => {
+                server.once('close', () => resolve(true));
+                server.close();
+            });
+            server.on('error', () => resolve(false));
+        });
+    }
+
     genererCertificats() {
         try {
-            // Générer certificats auto-signés avec OpenSSL
             execSync(`openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"`, { cwd: __dirname });
             console.log('✅ Certificats SSL générés');
             return true;
         } catch (error) {
-            console.log('❌ Erreur génération certificats:', error.message);
+            console.log('❌ Erreur génération certificats');
             return false;
         }
     }
 
-    start() {
-        // Vérifier si les certificats existent, sinon les générer
+    async start() {
+        // Trouver un port libre
+        this.port = await this.trouverPortLibre(3443);
+        console.log(`🔍 Port libre trouvé: ${this.port}`);
+
+        // Générer certificats si nécessaires
         if (!fs.existsSync('key.pem') || !fs.existsSync('cert.pem')) {
             console.log('🔐 Génération des certificats SSL...');
             if (!this.genererCertificats()) {
-                console.log('❌ Impossible de générer les certificats SSL');
-                console.log('💡 Installe OpenSSL: brew install openssl');
+                console.log('❌ Impossible de générer les certificats');
                 return;
             }
         }
@@ -168,7 +191,7 @@ class TOMServer {
     }
 }
 
-new TOMServer().start();
+new TOMServer().start().catch(console.error);
 SERVER_EOF
 
 echo "✅ Fichiers TOM Server créés"
@@ -185,18 +208,5 @@ echo "=========================="
 echo ""
 echo "🚀 Démarrage du serveur TOM..."
 
-# Démarrer le serveur immédiatement
-node serveur-https-complet.js &
-SERVER_PID=$!
-
-sleep 3
-echo ""
-echo "✅ TOM Server actif sur:"
-echo "   🌐 https://localhost:3443/test"
-echo "   🌐 https://$(ipconfig getifaddr en0 2>/dev/null || echo 'IP-LOCAL'):3443/test"
-echo ""
-echo "🎯 INSTALLATION RÉUSSIE !"
-echo "🎯 Le serveur fonctionne maintenant !"
-echo ""
-echo "💡 Pour arrêter: kill $SERVER_PID"
-echo ""
+# Démarrer le serveur
+node serveur-https-complet.js
