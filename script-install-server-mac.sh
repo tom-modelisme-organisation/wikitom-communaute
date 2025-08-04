@@ -1,5 +1,5 @@
 #!/bin/bash
-# TOM Server - Installateur macOS avec port automatique
+# TOM Server - Installateur macOS simple
 # URL: https://raw.githubusercontent.com/tom-modelisme-organisation/wikitom-communaute/main/script-install-server-mac.sh
 
 set -e
@@ -11,6 +11,7 @@ echo ""
 
 # Variables
 TOM_DIR="/Applications/TOM-Server"
+TOM_PORT=3444
 
 echo "📦 Étape 1/4 - Vérification Node.js..."
 
@@ -30,9 +31,10 @@ fi
 echo ""
 echo "📂 Étape 2/4 - Création dossier TOM..."
 
-# Arrêter tous les anciens serveurs Node.js
+# Arrêter d'éventuels anciens serveurs
 pkill -f "node.*serveur-https" 2>/dev/null || true
 pkill -f "node.*TOM" 2>/dev/null || true
+sleep 2
 
 sudo mkdir -p "$TOM_DIR"
 sudo chown -R "$(whoami):staff" "$TOM_DIR"
@@ -54,17 +56,19 @@ cat > "$TOM_DIR/package.json" << 'PACKAGE_EOF'
 }
 PACKAGE_EOF
 
-# Serveur HTTPS avec détection automatique de port libre
+# Serveur HTTPS simple avec port fixe
 cat > "$TOM_DIR/serveur-https-complet.js" << 'SERVER_EOF'
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const os = require('os');
-const net = require('net');
 const { execSync } = require('child_process');
+
+const PORT = 3444; // Port fixe pour éviter les conflits
 
 class TOMServer {
     constructor() {
+        this.port = PORT;
         this.app = express();
         this.codeAppairage = this.genererCode();
         this.setupExpress();
@@ -130,29 +134,12 @@ class TOMServer {
         return Math.random().toString(36).substr(2, 6).toUpperCase();
     }
 
-    async trouverPortLibre(startPort = 3443) {
-        for (let port = startPort; port < startPort + 10; port++) {
-            if (await this.isPortFree(port)) {
-                return port;
-            }
-        }
-        throw new Error('Aucun port libre trouvé');
-    }
-
-    isPortFree(port) {
-        return new Promise((resolve) => {
-            const server = net.createServer();
-            server.listen(port, () => {
-                server.once('close', () => resolve(true));
-                server.close();
-            });
-            server.on('error', () => resolve(false));
-        });
-    }
-
     genererCertificats() {
         try {
-            execSync(`openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"`, { cwd: __dirname });
+            execSync(`openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"`, { 
+                cwd: __dirname,
+                stdio: 'inherit'
+            });
             console.log('✅ Certificats SSL générés');
             return true;
         } catch (error) {
@@ -161,11 +148,7 @@ class TOMServer {
         }
     }
 
-    async start() {
-        // Trouver un port libre
-        this.port = await this.trouverPortLibre(3443);
-        console.log(`🔍 Port libre trouvé: ${this.port}`);
-
+    start() {
         // Générer certificats si nécessaires
         if (!fs.existsSync('key.pem') || !fs.existsSync('cert.pem')) {
             console.log('🔐 Génération des certificats SSL...');
@@ -180,7 +163,18 @@ class TOMServer {
             cert: fs.readFileSync('cert.pem')
         };
 
-        https.createServer(options, this.app).listen(this.port, '0.0.0.0', () => {
+        const server = https.createServer(options, this.app);
+        
+        server.on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                console.log(`❌ Port ${this.port} déjà utilisé`);
+                console.log('💡 Arrête les autres serveurs et relance');
+            } else {
+                console.log('❌ Erreur serveur:', err.message);
+            }
+        });
+
+        server.listen(this.port, '0.0.0.0', () => {
             console.log(`🚀 TOM Server démarré!`);
             console.log(`📡 HTTPS: https://localhost:${this.port}`);
             console.log(`🌐 Réseau: https://${this.getLocalIP()}:${this.port}`);
@@ -191,7 +185,7 @@ class TOMServer {
     }
 }
 
-new TOMServer().start().catch(console.error);
+new TOMServer().start();
 SERVER_EOF
 
 echo "✅ Fichiers TOM Server créés"
