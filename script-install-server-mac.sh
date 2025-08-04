@@ -1,6 +1,6 @@
 #!/bin/bash
 # TOM Server - Installateur macOS via curl
-# URL: https://raw.githubusercontent.com/TOM-Team/installer/main/install-macos.sh
+# URL: https://raw.githubusercontent.com/tom-modelisme-organisation/wikitom-communaute/main/script-install-server-mac.sh
 
 set -e
 
@@ -90,7 +90,7 @@ cat > "$TOM_DIR/package.json" << 'PACKAGE_EOF'
 }
 PACKAGE_EOF
 
-# Créer le serveur HTTPS TOM
+# Créer le serveur HTTPS TOM (VERSION CORRIGÉE)
 cat > "$TOM_DIR/serveur-https-complet.js" << 'SERVER_EOF'
 const express = require('express');
 const https = require('https');
@@ -145,9 +145,9 @@ class TOMServer {
     getLocalIP() {
         const interfaces = os.networkInterfaces();
         for (const name of Object.keys(interfaces)) {
-            for (const interface of interfaces[name]) {
-                if (interface.family === 'IPv4' && !interface.internal) {
-                    return interface.address;
+            for (const networkInterface of interfaces[name]) {
+                if (networkInterface.family === 'IPv4' && !networkInterface.internal) {
+                    return networkInterface.address;
                 }
             }
         }
