@@ -1,5 +1,5 @@
 #!/bin/bash
-# TOM Server - Installateur macOS avec instructions utilisateur
+# TOM Server - Installateur macOS avec ports multiples
 # URL: https://raw.githubusercontent.com/tom-modelisme-organisation/wikitom-communaute/main/script-install-server-mac.sh
 
 set -e
@@ -11,7 +11,6 @@ echo ""
 
 # Variables
 TOM_DIR="/Applications/TOM-Server"
-TOM_PORT=3444
 
 echo "📦 Étape 1/4 - Vérification Node.js..."
 
@@ -68,19 +67,17 @@ cat > "$TOM_DIR/package.json" << 'PACKAGE_EOF'
 }
 PACKAGE_EOF
 
-# Serveur HTTPS simple avec port fixe
+# Serveur HTTPS avec test automatique de ports
 cat > "$TOM_DIR/serveur-https-complet.js" << 'SERVER_EOF'
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const { execSync } = require('child_process');
-
-const PORT = 3444; // Port fixe pour éviter les conflits
 
 class TOMServer {
     constructor() {
-        this.port = PORT;
         this.app = express();
         this.codeAppairage = this.genererCode();
         this.setupExpress();
@@ -146,6 +143,39 @@ class TOMServer {
         return Math.random().toString(36).substr(2, 6).toUpperCase();
     }
 
+    async trouverPortLibre() {
+        const portsATester = [3444, 3445, 3446, 3447, 3448, 3449, 8443, 8444, 8445];
+        
+        for (const port of portsATester) {
+            console.log(`🔍 Test du port ${port}...`);
+            if (await this.isPortLibre(port)) {
+                console.log(`✅ Port ${port} disponible`);
+                return port;
+            } else {
+                console.log(`❌ Port ${port} occupé`);
+            }
+        }
+        
+        throw new Error('Aucun port libre trouvé dans la plage testée');
+    }
+
+    isPortLibre(port) {
+        return new Promise((resolve) => {
+            const server = net.createServer();
+            
+            server.listen(port, (err) => {
+                if (err) {
+                    resolve(false);
+                } else {
+                    server.once('close', () => resolve(true));
+                    server.close();
+                }
+            });
+            
+            server.on('error', () => resolve(false));
+        });
+    }
+
     genererCertificats() {
         try {
             console.log('🔐 Génération des certificats SSL...');
@@ -161,40 +191,45 @@ class TOMServer {
         }
     }
 
-    start() {
-        // Générer certificats si nécessaires
-        if (!fs.existsSync('key.pem') || !fs.existsSync('cert.pem')) {
-            if (!this.genererCertificats()) {
-                console.log('❌ Impossible de générer les certificats');
-                return;
+    async start() {
+        try {
+            // Trouver un port libre
+            this.port = await this.trouverPortLibre();
+            console.log(`🎯 Port sélectionné: ${this.port}`);
+
+            // Générer certificats si nécessaires
+            if (!fs.existsSync('key.pem') || !fs.existsSync('cert.pem')) {
+                if (!this.genererCertificats()) {
+                    console.log('❌ Impossible de générer les certificats');
+                    return;
+                }
             }
-        }
 
-        const options = {
-            key: fs.readFileSync('key.pem'),
-            cert: fs.readFileSync('cert.pem')
-        };
+            const options = {
+                key: fs.readFileSync('key.pem'),
+                cert: fs.readFileSync('cert.pem')
+            };
 
-        const server = https.createServer(options, this.app);
-        
-        server.on('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                console.log(`❌ Port ${this.port} déjà utilisé`);
-                console.log('💡 Arrête les autres serveurs et relance');
-            } else {
+            const server = https.createServer(options, this.app);
+            
+            server.on('error', (err) => {
                 console.log('❌ Erreur serveur:', err.message);
-            }
-        });
+            });
 
-        server.listen(this.port, '0.0.0.0', () => {
-            console.log(`🚀 TOM Server démarré!`);
-            console.log(`📡 HTTPS: https://localhost:${this.port}`);
-            console.log(`🌐 Réseau: https://${this.getLocalIP()}:${this.port}`);
-            console.log(`🔑 Code: ${this.codeAppairage}`);
-            console.log(`\n💡 Test: https://localhost:${this.port}/test`);
-            console.log(`   (Accepte le certificat auto-signé)`);
-            console.log(`🛑 Pour arrêter: Ctrl+C`);
-        });
+            server.listen(this.port, '0.0.0.0', () => {
+                console.log(`🚀 TOM Server démarré!`);
+                console.log(`📡 HTTPS: https://localhost:${this.port}`);
+                console.log(`🌐 Réseau: https://${this.getLocalIP()}:${this.port}`);
+                console.log(`🔑 Code: ${this.codeAppairage}`);
+                console.log(`\n💡 Test: https://localhost:${this.port}/test`);
+                console.log(`   (Accepte le certificat auto-signé)`);
+                console.log(`🛑 Pour arrêter: Ctrl+C`);
+            });
+
+        } catch (error) {
+            console.log('❌ Erreur lors du démarrage:', error.message);
+            console.log('💡 Essaie d\'arrêter les autres serveurs Node.js et relance');
+        }
     }
 }
 
@@ -215,8 +250,8 @@ echo "=========================="
 echo ""
 echo "🚀 Démarrage du serveur TOM..."
 echo ""
-echo "💡 INFORMATION : Le serveur va démarrer et rester actif."
-echo "   Pour l'arrêter plus tard, utilise Ctrl+C dans ce Terminal."
+echo "💡 INFORMATION : Le serveur va tester plusieurs ports automatiquement."
+echo "   Il utilisera le premier port libre trouvé."
 echo ""
 
 # Démarrer le serveur
